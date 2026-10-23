@@ -1,0 +1,14 @@
+[Unit]
+Description=GC5000 Force-Feedback-Proxy
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/gc5000_ffd.py --wait 10
+Restart=on-failure
+RestartSec=2
+# No [Install] section on purpose: this unit is only triggered by the
+# udev rule (90-gc5000.rules) when the controller connects. A Bluetooth
+# disconnect ends the daemon with exit code 0 (no restart loop).
+
+[Install]

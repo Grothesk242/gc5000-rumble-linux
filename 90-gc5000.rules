@@ -1,0 +1,5 @@
+# Start gc5000-ffd.service when the Nokia GC 5000 gamepad connects.
+# Bluetooth HID devices (bus 0005) do NOT expose idVendor/idProduct
+# sysfs attributes (those are USB-specific) -> match the parent device
+# name instead: 0005:<VID>:<PID>.<unique> (case matters, as in dmesg).
+ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:1D5A:1802.*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gc5000-ffd.service"
