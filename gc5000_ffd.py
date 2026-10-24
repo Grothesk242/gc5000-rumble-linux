@@ -1,41 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-gc5000_ffd.py -- Force-Feedback-Proxy-Daemon fuer den Nokia Game Controller 5000
+gc5000_ffd.py -- Force-feedback proxy daemon for the Nokia Game Controller 5000
 =================================================================================
 
-Grundlage (Ergebnis der hidraw-Recherche, Oktober 2026):
-  Report-ID 0x01, 2 Byte Payload, binäre Motorsteuerung:
-    Byte 0 = starker Motor   (0x00 = aus, sonst an)
-    Byte 1 = schwacher Motor  (0x00 = aus, sonst an)
-  Stop-Report 0x01:0000 beendet die Vibration sofort.
-  (Amplitude ist binär: 0x01 und 0xFF fuehlen sich gleich an.)
+Background (result of the hidraw reverse-engineering, October 2026):
+  Report ID 0x01, 2-byte payload, binary motor control:
+    Byte 0 = strong motor  (0x00 = off, anything else = on)
+    Byte 1 = weak motor     (0x00 = off, anything else = on)
+  The stop report 0x01:0000 ends the vibration immediately.
+  (The amplitude is binary: 0x01 and 0xFF feel exactly the same.)
 
-Der Daemon:
-  1. Findet hidraw-Device und Gamepad-Event-Device des Controllers.
-  2. Legt ein uinput-Gerät mit identischen Buttons/Achsen plus
-     FF-Fähigkeiten (FF_RUMBLE, FF_PERIODIC, FF_CONSTANT, FF_GAIN) an.
-  3. Grabbed das echte Gamepad (EVIOCGRAB), sodass Spiele nur den
-     Proxy sehen. Alle Eingabe-Events werden 1:1 durchgereicht.
-  4. Übersetzt FF-Uploads/-Playback der Spiele in hidraw-Reports.
+The daemon:
+  1. Finds the controller's hidraw device and gamepad event device.
+  2. Creates a uinput device with identical buttons/axes plus
+     FF capabilities (FF_RUMBLE, FF_PERIODIC, FF_CONSTANT, FF_GAIN).
+  3. Grabs the real gamepad (EVIOCGRAB) so games only see the proxy.
+     All input events are passed through 1:1.
+  4. Translates the games' FF uploads/playback into hidraw reports.
 
-Validierung:
+Validation:
     Terminal 1:  sudo python3 gc5000_ffd.py
-    Terminal 2:  fftest /dev/input/<event-Node-des-Proxys>
-                 -> Effekte 0 (sinus), 4 (strong), 5 (weak) spielen.
-                 Das Pad muss vibrieren; 'q' zum Stoppen sendet 0x00.
+    Terminal 2:  fftest /dev/input/<proxy event node>
+                 -> effects 0 (sine), 4 (strong), 5 (weak) play.
+                 The pad must vibrate; pressing 'q' to stop sends 0x00.
 
-Hinweise:
-  - Vor dem Start laufende Spiele/Steam beenden bzw. Steam danach neu
-    starten, damit der Proxy erkannt wird.
-  - FF_GAIN wird binär interpretiert (gain==0 -> Motoren aus).
-  - FF-Protokoll: EV_UINPUT-Event (request_id im 'value') plus
-    UI_BEGIN_FF_UPLOAD/UI_END_FF_UPLOAD- bzw. _FF_ERASE-Ioctl, Strukturen
-    104/12 Byte (s. uinput.h des Kernels). ioctl-Nummern, FF-Codes und
-    EV_UINPUT werden zur Laufzeit aus den UAPI-Headern gelesen.
+Notes:
+  - Close running games/Steam before starting, or restart Steam
+    afterwards so the proxy gets picked up.
+  - FF_GAIN is interpreted in a binary fashion (gain==0 -> motors off).
+  - FF protocol: EV_UINPUT event (request_id in 'value') plus the
+    UI_BEGIN_FF_UPLOAD/UI_END_FF_UPLOAD resp. _FF_ERASE ioctls, the
+    structs are 104/12 bytes (see the kernel's uinput.h). ioctl
+    numbers, FF codes and EV_UINPUT are read from the UAPI headers at
+    runtime.
 
-Als systemd-Dienst, gestartet sobald der Controller per Bluetooth erscheint
-(udev-Regel auf hidraw-Add von 1D5A:1802):
+As a systemd service, started as soon as the controller shows up via
+Bluetooth (udev rule on hidraw add of 1D5A:1802):
 
   /etc/systemd/system/gc5000-ffd.service
   ------------------------------------------------------------
@@ -47,26 +48,26 @@ Als systemd-Dienst, gestartet sobald der Controller per Bluetooth erscheint
   ExecStart=/usr/bin/python3 /usr/local/bin/gc5000_ffd.py --wait 10
   Restart=on-failure
   RestartSec=2
-  # Kein [Install]-Abschnitt: der Dienst wird ausschliesslich per
-  # udev-Regel getriggert. BT-Disconnect beendet ihn mit Exit 0
-  # (kein Restart-Loop, solange das Pad weg ist).
+  # No [Install] section: the service is triggered exclusively by the
+  # udev rule. A Bluetooth disconnect ends it with exit code 0
+  # (no restart loop while the pad is away).
   ------------------------------------------------------------
 
   /etc/udev/rules.d/90-gc5000.rules
   ------------------------------------------------------------
-  # Achtung: BT-HID-Geraete (HID-Bus 0005) haben KEINE idVendor/idProduct-
-  # Attribute (die sind USB-spezifisch) -> ueber den Parent-Namen matchen:
+  # Note: Bluetooth HID devices (HID bus 0005) have NO idVendor/idProduct
+  # attributes (those are USB-specific) -> match on the parent name:
   ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:1D5A:1802.*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gc5000-ffd.service"
   ------------------------------------------------------------
 
-Einrichtung (einmalig):
+Setup (one-time):
   sudo install -m 755 gc5000_ffd.py /usr/local/bin/gc5000_ffd.py
   sudo systemctl daemon-reload
   sudo udevadm control --reload
-  # Controller ausschalten, neu verbinden -> Dienst startet automatisch:
+  # Switch the controller off and reconnect it -> the service starts automatically:
   systemctl status gc5000-ffd
 
-Abhängigkeiten: nur Python-Stdlib. Muss als root laufen (uinput + hidraw + grab).
+Dependencies: Python stdlib only. Must run as root (uinput + hidraw + grab).
 """
 
 import argparse
@@ -83,13 +84,13 @@ VID, PID = 0x1D5A, 0x1802
 REPORT_ID = 0x01
 PAD_NAME = "Nokia GC 5000"
 
-# ------------------------------------------------------------ Kernel-Konstanten
+# ------------------------------------------------------------ kernel constants
 EV_SYN, EV_KEY, EV_ABS, EV_MSC = 0x00, 0x01, 0x03, 0x04
 EV_FF = 0x15
 EV_UINPUT = 0x0410
-# Fallback-Werte (Mainline-Stand); werden per _resolve_event_codes() aus den
-# UAPI-Headern ueberschrieben -- der Kernel auf roamer hat die FF-Codes
-# umnummeriert (FF_RUMBLE liegt dort NICHT bei 0x50).
+# Fallback values (mainline state); overridden by _resolve_event_codes()
+# from the UAPI headers -- the kernel this was developed on has
+# renumbered the FF codes (FF_RUMBLE is NOT at 0x50 there).
 FF_RUMBLE, FF_PERIODIC, FF_CONSTANT = 0x50, 0x51, 0x52
 FF_SQUARE, FF_TRIANGLE, FF_SINE = 0x58, 0x59, 0x5a
 FF_GAIN, FF_AUTOCENTER = 0x60, 0x61
@@ -100,10 +101,10 @@ def _IOC(d, t, nr, size):
     return (d << 30) | (size << 16) | (t << 8) | nr
 
 
-# Fallback-Werte, falls /usr/include/linux/uinput.h nicht lesbar ist.
-# Die tatsaechlichen Werte werden zur Laufzeit aus dem Header geholt:
-# uinput antwortet auf unbekannte ioctl-Nummern mit EINVAL, deshalb
-# raten wir hier NICHT mehr.
+# Fallback values in case /usr/include/linux/uinput.h is not readable.
+# The actual values are fetched from the header at runtime:
+# uinput answers unknown ioctl numbers with EINVAL, so we do NOT
+# guess here anymore.
 UI = {
     "UI_SET_EVBIT":  _IOC(1, 0x55, 100, 4),
     "UI_SET_KEYBIT": _IOC(1, 0x55, 101, 4),
@@ -112,8 +113,8 @@ UI = {
     "UI_SET_FFBIT":  _IOC(1, 0x55, 107, 4),
     "UI_DEV_CREATE": (0x55 << 8) | 1,
     "UI_DEV_DESTROY": (0x55 << 8) | 2,
-    # FF-Handshake-Protokoll (s. uinput.h des Kernels): EV_UINPUT-Event
-    # mit request_id im 'value', dann BEGIN/END-Ioctl mit dieser Struktur.
+    # FF handshake protocol (see the kernel's uinput.h): EV_UINPUT event
+    # with the request_id in 'value', then BEGIN/END ioctls with this struct.
     "UI_BEGIN_FF_UPLOAD": _IOC(3, 0x55, 200, 104),
     "UI_END_FF_UPLOAD":   _IOC(1, 0x55, 201, 104),
     "UI_BEGIN_FF_ERASE":  _IOC(3, 0x55, 202, 12),
@@ -125,14 +126,14 @@ EVIOCGRAB = _IOC(1, 0x45, 0x90, 4)
 
 
 def _resolve_from_header(verbose=False):
-    """UI_*-Konstanten aus /usr/include/linux/uinput.h parsen."""
+    """Parse UI_* constants from /usr/include/linux/uinput.h."""
     global UI_FF_UPLOAD, UI_FF_ERASE, EV_UINPUT
     import re
     try:
         with open("/usr/include/linux/uinput.h") as f:
             text = f.read()
     except OSError as e:
-        print(f"Warnung: uinput.h nicht lesbar ({e}), nutze Fallback-Konstanten.")
+        print(f"Warning: cannot read uinput.h ({e}), using fallback constants.")
         return
     for name in ("UI_FF_UPLOAD", "UI_FF_ERASE"):
         m = re.search(r"#define\s+%s\s+(\d+)" % name, text)
@@ -150,7 +151,7 @@ def _resolve_from_header(verbose=False):
         d = {"_IOWR": 3, "_IOW": 1, "_IOR": 2, "_IO": 0}[macro]
         typ = (typ or "").strip()
         if macro == "_IO":
-            size = 0                      # _IO hat kein Datenelement: Groesse 0!
+            size = 0                      # _IO has no data element: size 0!
         elif typ in sizes:
             size = sizes[typ]
         else:
@@ -163,11 +164,11 @@ def _resolve_from_header(verbose=False):
 
 
 def _resolve_event_codes(verbose=False):
-    """EV_FF- und FF-Code-Werte aus den UAPI-Headern holen.
+    """Fetch EV_FF and FF code values from the UAPI headers.
 
-    Neuere Kernel haben die FF-Codes umnummeriert; die Werte duerfen nicht
-    mehr hardcoded werden. Gesucht wird in input-event-codes.h und input.h,
-    sowohl #define- als auch enum-Stil ('FF_RUMBLE = 42').
+    Newer kernels have renumbered the FF codes; the values must not be
+    hardcoded anymore. Searches input-event-codes.h and input.h, in
+    both #define and enum style ('FF_RUMBLE = 42').
     """
     global FF_RUMBLE, FF_PERIODIC, FF_CONSTANT, FF_GAIN, FF_AUTOCENTER, EV_FF
     import re
@@ -182,7 +183,7 @@ def _resolve_event_codes(verbose=False):
         except OSError:
             pass
     if not text:
-        print("Warnung: input-event-codes.h nicht lesbar -- FF-Codes bleiben Fallback.")
+        print("Warning: cannot read input-event-codes.h -- keeping FF code fallbacks.")
         return
     for name in names:
         m = (re.search(r"#define\s+%s\s+[\(]?\s*(0[xX][0-9a-fA-F]+|\d+)" % name, text)
@@ -190,10 +191,10 @@ def _resolve_event_codes(verbose=False):
         if m:
             globals()[name] = int(m.group(1), 0)
         else:
-            print(f"Warnung: {name} nicht im Header gefunden, behalte Fallback "
+            print(f"Warning: {name} not found in header, keeping fallback "
                   f"{globals()[name]:#x}.")
     if verbose:
-        print("  FF-Codes: " + ", ".join(f"{n}={globals()[n]:#x}" for n in names))
+        print("  FF codes: " + ", ".join(f"{n}={globals()[n]:#x}" for n in names))
 
 
 def EVIOCGBIT(ev, size):
@@ -204,7 +205,7 @@ def EVIOCGABS(code):
     return _IOC(2, 0x45, 0x40 + code, 24)
 
 
-# Strukturgrößen fuer x86_64 / aktuelles glibc
+# Struct sizes for x86_64 / current glibc
 FMT_EVENT     = "<qqHHi"      # struct input_event      = 24
 FMT_UPLOAD    = "<Ii48s48s"   # struct uinput_ff_upload = 104 (request_id, retval, effect, old)
 FMT_ERASE     = "<IiI"        # struct uinput_ff_erase   = 12 (request_id, retval, effect_id)
@@ -215,7 +216,7 @@ FMT_ABSINFO   = "<6i"         # struct input_absinfo    = 24
 
 # --------------------------------------------------------------------- hidraw
 def hid_device_dir(node):
-    """HID-Device-Verzeichnis hinter einem hidraw-Node finden (s. Probe-Skript)."""
+    """Find the HID device directory behind a hidraw node (see the probe script)."""
     real = os.path.realpath(os.path.join("/sys/class/hidraw", os.path.basename(node)))
     for cand in (os.path.join(real, "device"),
                  os.path.dirname(os.path.dirname(real)),
@@ -256,19 +257,19 @@ def find_hidraw():
     return None
 
 
-REFRESH_INTERVAL = 0.07  # s: Heartbeat (kurz == dichte Burst-Overlaps == weicher Dauerton)
-PWM_TICK = 0.01        # s: Auswertetakt der Periodic-Amplitude (100 Hz)
-FF_LEVEL_LOW = 0.35    # Sinusbetrag darunter: Stille
-FF_LEVEL_HIGH = 0.7    # darunter: nur schwacher Motor (leise Stufe), darueber: beide
+REFRESH_INTERVAL = 0.07  # s: heartbeat (short == dense burst overlaps == smooth continuous tone)
+PWM_TICK = 0.01        # s: evaluation tick of the periodic amplitude (100 Hz)
+FF_LEVEL_LOW = 0.35    # sine magnitude below this: silence
+FF_LEVEL_HIGH = 0.7    # below this: weak motor only (soft level); above: both
 
 
 class Rumble:
-    """Binäre Motorsteuerung ueber hidraw (Report-ID 0x01, 2 Byte).
+    """Binary motor control via hidraw (report ID 0x01, 2 bytes).
 
-    Die Firmware des GC5000 hoert nach kurzer Zeit auf zu vibrieren, wenn der
-    Host nicht nachlegt: Jeder Report mit Wert != 0x00 loest nur einen Burst
-    aus. set() schreibt bei Zustandswechsel, refresh() wiederholt das aktuelle
-    Report (Heartbeat), solange ein Motor aktiv ist.
+    The GC5000 firmware stops vibrating after a short while unless the
+    host keeps sending: every report with a value != 0x00 only triggers
+    a short burst. set() writes on state changes, refresh() repeats
+    the current report (heartbeat) while a motor is active.
     """
 
     def __init__(self, node, verbose=False):
@@ -291,7 +292,7 @@ class Rumble:
         self._send_current(log=True)
 
     def refresh(self):
-        """Heartbeat: aktuelles Report erneut senden (Burst-Firmware)."""
+        """Heartbeat: re-send the current report (burst firmware)."""
         if self.current == (0, 0):
             return
         self._send_current(log=False)
@@ -304,7 +305,7 @@ class Rumble:
             if log and self.verbose:
                 print(f"  rumble -> strong={self.current[0]} weak={self.current[1]}")
         except OSError as e:
-            print(f"hidraw-Fehler ({e}), Reopen beim nächsten Versuch", file=sys.stderr)
+            print(f"hidraw error ({e}), will reopen on next attempt", file=sys.stderr)
             if self.fd is not None:
                 try:
                     os.close(self.fd)
@@ -313,14 +314,14 @@ class Rumble:
                 self.fd = None
 
 
-# --------------------------------------------------------- Gamepad-Device finden
+# --------------------------------------------------------- find the gamepad device
 def find_pad_event():
-    """Das Gamepad-Event-Device (nicht Consumer Control) aus /proc auslesen."""
+    """Read the gamepad event device (not the consumer control) from /proc."""
     try:
         with open("/proc/bus/input/devices") as f:
             content = f.read()
     except OSError as e:
-        sys.exit(f"Kann /proc/bus/input/devices nicht lesen: {e}")
+        sys.exit(f"Cannot read /proc/bus/input/devices: {e}")
     for block in content.strip().split("\n\n"):
         name, handlers, abs_bits = None, [], None
         for line in block.splitlines():
@@ -354,11 +355,11 @@ ABS_CNT = 64
 
 
 def create_uinput(pad_fd, verbose=False):
-    """Virtuelles Gamepad mit identischen Achsen/Tasten plus FF anlegen.
+    """Create a virtual gamepad with identical axes/buttons plus FF.
 
-    Bewusst Legacy-API: Name/ID/ff_effects_max/ABS-Werte werden als
-    struct uinput_user_dev geschrieben (stabil seit Kernel 2.6) statt
-    ueber UI_DEV_SETUP/UI_ABS_SETUP.
+    Deliberately legacy API: name/ID/ff_effects_max/ABS values are
+    written as struct uinput_user_dev (stable since kernel 2.6)
+    instead of using UI_DEV_SETUP/UI_ABS_SETUP.
     """
     fd = os.open("/dev/uinput", os.O_RDWR | os.O_NONBLOCK)
 
@@ -374,15 +375,15 @@ def create_uinput(pad_fd, verbose=False):
         for c in bitfield(ioctl_read(pad_fd, EVIOCGBIT(EV_MSC, 8), 8)):
             fcntl.ioctl(fd, UI["UI_SET_MSCBIT"], c)
 
-    # Force Feedback anbieten (Report-Nummern aus dem Kernel-Header!)
+    # Offer force feedback (report numbers from the kernel header!)
     fcntl.ioctl(fd, UI["UI_SET_EVBIT"], EV_FF)
-    # Periodische Wellenformen sind in diesem Kernel eigene FF-Bits und
-    # werden beim Periodic-Upload separat validiert -> mitsetzen.
+    # Periodic waveforms are separate FF bits in this kernel and are
+    # validated separately during a periodic upload -> set them as well.
     for ffb in (FF_RUMBLE, FF_PERIODIC, FF_CONSTANT, FF_GAIN,
                 FF_SQUARE, FF_TRIANGLE, FF_SINE):
         fcntl.ioctl(fd, UI["UI_SET_FFBIT"], ffb)
 
-    # ABS-Bits setzen und Absinfo aus dem echten Pad uebernehmen
+    # Set ABS bits and adopt absinfo from the real pad
     absbits = bitfield(ioctl_read(pad_fd, EVIOCGBIT(EV_ABS, 8), 8)) if EV_ABS in evbits else []
     absmax, absmin, absfuzz, absflat = ([0] * ABS_CNT for _ in range(4))
     for c in absbits:
@@ -390,7 +391,7 @@ def create_uinput(pad_fd, verbose=False):
         info = struct.unpack(FMT_ABSINFO, ioctl_read(pad_fd, EVIOCGABS(c), 24))
         _value, absmin[c], absmax[c], absfuzz[c], absflat[c], _res = info
 
-    # Legacy: struct uinput_user_dev (1116 Byte) schreiben, dann DEV_CREATE
+    # Legacy: write struct uinput_user_dev (1116 bytes), then DEV_CREATE
     user_dev = (struct.pack("<80sHHHHI", PROXY_NAME, 0x05, VID, PID, 0x0100, 32)
                 + struct.pack("<64i", *absmax)
                 + struct.pack("<64i", *absmin)
@@ -399,7 +400,7 @@ def create_uinput(pad_fd, verbose=False):
     write_all(fd, user_dev)
     fcntl.ioctl(fd, UI["UI_DEV_CREATE"])
 
-    # Event-Node ueber sysfs Namenssuche finden (kein UI_GET_SYSNAME noetig)
+    # Find the event node via a sysfs name scan (no UI_GET_SYSNAME needed)
     event_path = None
     for entry in sorted(os.listdir("/sys/class/input")):
         try:
@@ -420,7 +421,7 @@ def write_all(fd, data):
 
 
 class Stream:
-    """Eingehende Bytes puffern und in input_events / FF-Structs zerlegen."""
+    """Buffer incoming bytes and split them into input_events / FF structs."""
 
     def __init__(self):
         self.buf = b""
@@ -443,7 +444,7 @@ class Stream:
 
 
 def parse_effect(effect):
-    """(strong, weak, length_ms, period_ms) aus einem 48-Byte-ff_effect holen."""
+    """Extract (strong, weak, length_ms, period_ms) from a 48-byte ff_effect."""
     etype = struct.unpack_from("<H", effect, 0)[0]
     length = struct.unpack_from("<H", effect, 10)[0]
     if etype == FF_RUMBLE:
@@ -456,12 +457,12 @@ def parse_effect(effect):
     if etype == FF_CONSTANT:
         level = struct.unpack_from("<h", effect, 16)[0]
         return level != 0, level != 0, length, 0
-    return None  # nicht unterstuetzt
+    return None  # not supported
 
 
 def run_proxy(args):
-    # udev-Start: hidraw-Node existiert evtl. schon, waehrend der Event-Node
-    # des Pads noch nicht (oder umgekehrt) -> bis --wait Sekunden pollen.
+    # udev start: the hidraw node may already exist while the pad's
+    # event node does not yet (or vice versa) -> poll for --wait seconds.
     deadline = time.monotonic() + getattr(args, "wait", 0.0)
     hidraw_node = args.device or find_hidraw()
     pad_path = find_pad_event()
@@ -470,9 +471,9 @@ def run_proxy(args):
         hidraw_node = hidraw_node or (args.device or find_hidraw())
         pad_path = pad_path or find_pad_event()
     if not hidraw_node:
-        sys.exit("Kein hidraw-Device fuer 1D5A:1802 -- Controller verbunden?")
+        sys.exit("No hidraw device for 1D5A:1802 -- is the controller connected?")
     if not pad_path:
-        sys.exit("Kein Gamepad-Event-Device 'Nokia GC 5000' gefunden (ABS != 0).")
+        sys.exit("No gamepad event device 'Nokia GC 5000' found (ABS != 0).")
 
     print(f"hidraw:  {hidraw_node}")
     print(f"pad:     {pad_path}")
@@ -486,31 +487,31 @@ def run_proxy(args):
             fcntl.ioctl(pad_fd, EVIOCGRAB, 1)
         except OSError as e:
             if e.errno == errno.EBUSY:
-                sys.exit("Pad ist bereits gegrabbt -- laeuft schon eine andere"
-                         " Daemon-Instanz?\n"
+                sys.exit("The pad is already grabbed -- is another daemon\n"
+                         " instance running?\n"
                          "  systemctl status gc5000-ffd\n"
-                         "  sudo systemctl stop gc5000-ffd  # dann erneut starten\n"
-                         "(Tipp: der systemd-Dienst startet per udev-Regel bei jedem\n"
-                         " Controller-Reconnect automatisch neu.)")
+                         "  sudo systemctl stop gc5000-ffd  # then start again\n"
+                         "(Hint: the systemd service restarts automatically via\n"
+                         " the udev rule on every controller reconnect.)")
             raise
     print(f"proxy:   {event_path}  (fftest {event_path})")
-    print("FF-Proxy aktiv -- Ctrl+C zum Beenden.")
+    print("FF proxy active -- Ctrl+C to quit.")
 
     effects = {}   # effect_id -> (strong, weak, length_ms, period_ms)
-    active = {}    # effect_id -> (Deadline | None, Startzeit)
+    active = {}    # effect_id -> (deadline | None, start time)
     gain = 0xFFFF
     last_refresh = 0.0
     stream = Stream()
     grabbed = not args.no_grab
 
     def motor_target(now=None):
-        """Soll-Zustand der Motoren.
+        """Target motor state.
 
-        Zwei binäre Motoren = 3 Amplitudenstufen. Periodische Effekte
-        quantisieren den Sinusbetrag darauf: aus / nur schwacher Motor /
-        beide Motoren. Innerhalb einer Stufe laeuft der Motor durchgehend
-        (Heartbeat), der Stufenwechsel folgt der Sinuskurve -- das ist die
-        Wellenform, die dieses Hardware-Layout darstellen kann.
+        Two binary motors = 3 amplitude levels. Periodic effects
+        quantize the sine magnitude onto these: off / weak motor only /
+        both motors. Within a level the motor runs continuously
+        (heartbeat); the level changes follow the sine curve -- that is
+        the waveform this hardware layout can express.
         """
         now = now if now is not None else time.monotonic()
         strong = weak = False
@@ -525,7 +526,7 @@ def run_proxy(args):
                     strong, weak = True, True
                 elif duty >= FF_LEVEL_LOW:
                     weak = True
-                # sonst: Stille
+                # otherwise: silence
             else:
                 strong = strong or eff[0]
                 weak = weak or eff[1]
@@ -547,10 +548,10 @@ def run_proxy(args):
                     timeout = d if timeout is None else min(timeout, d)
             strong, weak = motor_target(now)
             if strong or weak or rumble.current != (0, 0):
-                # Heartbeat, solange irgendein Motor laufen soll
+                # Heartbeat as long as any motor should run
                 timeout = REFRESH_INTERVAL if timeout is None else min(timeout, REFRESH_INTERVAL)
             if any(effects.get(eid) and effects[eid][3] > 0 for eid in active):
-                # Periodic aktiv: Sinus-Stufen regelmaessig neu bewerten
+                # Periodic active: re-evaluate the sine levels regularly
                 timeout = PWM_TICK if timeout is None else min(timeout, PWM_TICK)
             if timeout is not None and timeout < 0:
                 timeout = 0
@@ -560,7 +561,7 @@ def run_proxy(args):
             expired = [i for i, e in active.items() if e[0] is not None and e[0] <= now]
             for i in expired:
                 del active[i]
-            # Stufenwechsel nachfuehren und Burst-Heartbeat aufrechterhalten
+            # Follow level changes and keep the burst heartbeat alive
             update_motors(now)
             if rumble.current != (0, 0) and now - last_refresh >= REFRESH_INTERVAL:
                 rumble.refresh()
@@ -569,8 +570,8 @@ def run_proxy(args):
             if pad_fd in r:
                 data = os.read(pad_fd, 65536)
                 if not data:
-                    raise OSError("Pad-Event-Device geschlossen (Bluetooth getrennt?)")
-                write_all(uinput_fd, data)   # 1:1 an den Proxy durchreichen
+                    raise OSError("Pad event device closed (Bluetooth disconnected?)")
+                write_all(uinput_fd, data)   # pass through to the proxy 1:1
 
             if uinput_fd in r:
                 stream.feed(os.read(uinput_fd, 65536))
@@ -580,15 +581,16 @@ def run_proxy(args):
                         break
                     etype, code, value = ev
                     if etype == EV_UINPUT:
-                        # Protokoll dieses Kernels (s. uinput.h): das EV_UINPUT-
-                        # Event traegt die request_id in 'value'. Effect-Daten
-                        # kommen per UI_BEGIN_FF_UPLOAD-Ioctl, die Antwort geht
-                        # per UI_END_FF_UPLOAD-Ioctl zurueck.
+                        # This kernel's protocol (see uinput.h): the
+                        # EV_UINPUT event carries the request_id in
+                        # 'value'. Effect data arrives via the
+                        # UI_BEGIN_FF_UPLOAD ioctl; the reply goes back
+                        # via the UI_END_FF_UPLOAD ioctl.
                         if code == UI_FF_UPLOAD:
                             buf = bytearray(struct.calcsize(FMT_UPLOAD))
                             struct.pack_into("<Ii", buf, 0, value & 0xFFFFFFFF, 0)
                             fcntl.ioctl(uinput_fd, UI["UI_BEGIN_FF_UPLOAD"], buf, True)
-                            effect = bytes(buf[8:56])   # effect (48), old folgt bei 56
+                            effect = bytes(buf[8:56])   # effect (48), old follows at offset 56
                             parsed = parse_effect(effect)
                             _etype, eid = struct.unpack_from("<Hh", effect, 0)
                             if parsed:
@@ -598,8 +600,8 @@ def run_proxy(args):
                                     print(f"  FF upload id={eid} -> {parsed}")
                             else:
                                 retval = 22  # EINVAL
-                                print(f"  FF-Typ {struct.unpack_from('<H', effect)[0]:#x} "
-                                      "nicht unterstuetzt")
+                                print(f"  FF type {struct.unpack_from('<H', effect)[0]:#x} "
+                                      "not supported")
                             struct.pack_into("<i", buf, 4, retval)
                             fcntl.ioctl(uinput_fd, UI["UI_END_FF_UPLOAD"], bytes(buf))
                         elif code == UI_FF_ERASE:
@@ -613,7 +615,7 @@ def run_proxy(args):
                             fcntl.ioctl(uinput_fd, UI["UI_END_FF_ERASE"], bytes(buf))
                             update_motors()
                         elif args.verbose:
-                            print(f"  EV_UINPUT code={code} ignoriert")
+                            print(f"  EV_UINPUT code={code} ignored")
                     elif etype == EV_FF:
                         if code == FF_GAIN:
                             gain = value & 0xFFFF
@@ -630,9 +632,9 @@ def run_proxy(args):
                             else:
                                 active.pop(code, None)
                             update_motors(now)
-                    # alle anderen Typen sind Echos der Durchleitung -> ignorieren
+                    # all other types are echoes of the pass-through -> ignore
     except (KeyboardInterrupt, OSError) as e:
-        print(f"\nBeende ({e.__class__.__name__}: {e})")
+        print(f"\nShutting down ({e.__class__.__name__}: {e})")
     finally:
         rumble.stop()
         try:
@@ -649,13 +651,13 @@ def run_proxy(args):
                 os.close(fd)
             except OSError:
                 pass
-    print("Proxy beendet.")
+    print("Proxy stopped.")
 
 
 def cmd_vibrate(args):
     node = args.device or find_hidraw()
     if not node:
-        sys.exit("Kein hidraw-Device fuer 1D5A:1802 -- Controller verbunden?")
+        sys.exit("No hidraw device for 1D5A:1802 -- is the controller connected?")
     rumble = Rumble(node)
     strong = args.motors in ("both", "strong")
     weak = args.motors in ("both", "weak")
@@ -670,33 +672,33 @@ def cmd_vibrate(args):
             rumble.refresh()
         rumble.stop()
         time.sleep(0.1)
-    print(f"{args.pulse}x Motor={args.motors} fuer je {args.duration}s "
-          f"(Heartbeat alle {REFRESH_INTERVAL}s).")
+    print(f"{args.pulse}x motor={args.motors} for {args.duration}s each "
+          f"(heartbeat every {REFRESH_INTERVAL}s).")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="FF-Proxy fuer den Nokia GC5000")
-    ap.add_argument("--device", help="hidraw-Node uebersteuern (z. B. /dev/hidraw3)")
+    ap = argparse.ArgumentParser(description="FF proxy for the Nokia GC5000")
+    ap.add_argument("--device", help="override the hidraw node (e.g. /dev/hidraw3)")
     ap.add_argument("--no-grab", action="store_true",
-                    help="echtes Pad nicht grabben (Debug: Spiele sehen beide Geraete)")
-    ap.add_argument("--verbose", "-v", action="store_true", help="FF-Traffic loggen")
-    ap.add_argument("--wait", type=float, default=0.0, metavar="SEK",
-                    help="beim Start bis zu N Sek. auf den Controller warten "
-                         "(fuer udev-/systemd-Start)")
+                    help="do not grab the real pad (debug: games see both devices)")
+    ap.add_argument("--verbose", "-v", action="store_true", help="log FF traffic")
+    ap.add_argument("--wait", type=float, default=0.0, metavar="SEC",
+                    help="wait up to N seconds for the controller at startup "
+                         "(for udev/systemd start)")
     sub = ap.add_subparsers(dest="cmd")
-    v = sub.add_parser("vibrate", help="Nur Vibration testen (ohne Proxy)")
+    v = ap.add_parser("vibrate", help="just test vibration (without proxy)")
     v.add_argument("--motors", choices=("both", "strong", "weak"), default="both")
-    v.add_argument("--duration", type=float, default=0.5, help="Sek. pro Puls")
+    v.add_argument("--duration", type=float, default=0.5, help="seconds per pulse")
     v.add_argument("--pulse", type=int, default=1)
     args = ap.parse_args()
 
-    # Kernel-Konstanten aus den UAPI-Headern holen (ioctl-Nummern und FF-Codes;
-    # EINVAL-Historie s. Projektlog).
+    # Fetch kernel constants from the UAPI headers (ioctl numbers and FF
+    # codes; see the project log for the EINVAL history).
     _resolve_from_header(verbose=args.verbose)
     _resolve_event_codes(verbose=args.verbose)
 
     if os.geteuid() != 0:
-        print("Hinweis: nicht als root -- uinput/hidraw/GRAB werden scheitern.\n")
+        print("Note: not running as root -- uinput/hidraw/GRAB will fail.\n")
 
     if args.cmd == "vibrate":
         cmd_vibrate(args)
