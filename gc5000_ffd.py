@@ -70,6 +70,7 @@ Abhängigkeiten: nur Python-Stdlib. Muss als root laufen (uinput + hidraw + grab
 """
 
 import argparse
+import errno
 import fcntl
 import math
 import os
@@ -481,7 +482,17 @@ def run_proxy(args):
     pad_fd = os.open(pad_path, os.O_RDWR | os.O_NONBLOCK)
     uinput_fd, event_path = create_uinput(pad_fd, verbose=args.verbose)
     if not args.no_grab:
-        fcntl.ioctl(pad_fd, EVIOCGRAB, 1)
+        try:
+            fcntl.ioctl(pad_fd, EVIOCGRAB, 1)
+        except OSError as e:
+            if e.errno == errno.EBUSY:
+                sys.exit("Pad ist bereits gegrabbt -- laeuft schon eine andere"
+                         " Daemon-Instanz?\n"
+                         "  systemctl status gc5000-ffd\n"
+                         "  sudo systemctl stop gc5000-ffd  # dann erneut starten\n"
+                         "(Tipp: der systemd-Dienst startet per udev-Regel bei jedem\n"
+                         " Controller-Reconnect automatisch neu.)")
+            raise
     print(f"proxy:   {event_path}  (fftest {event_path})")
     print("FF-Proxy aktiv -- Ctrl+C zum Beenden.")
 
