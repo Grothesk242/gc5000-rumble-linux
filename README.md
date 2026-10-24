@@ -98,6 +98,36 @@ Options: `--device /dev/hidrawN` (override hidraw node), `--no-grab` (debug:
 don't grab the real pad, games will see both devices), `--wait SECONDS`
 (wait for the device to appear, used by the systemd unit).
 
+## Games outside Steam (Heroic / GOG & friends)
+
+Games launched outside Steam often enumerate joysticks themselves and may
+pick the *real* (grabbed, FF-less) pad instead of the proxy — input works,
+but rumble never reaches the daemon. Fix: pin SDL to the proxy.
+
+1. Give the proxy a stable device path.
+   `/etc/udev/rules.d/91-gc5000-ffproxy.rules`:
+
+   ```
+   ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000 (FF-Proxy)", SYMLINK+="gc5000-ffproxy"
+   ```
+
+   Then `sudo udevadm control --reload` and reconnect the controller. The
+   proxy is now reachable as `/dev/gc5000-ffproxy`, independent of the
+   `eventN` numbering.
+
+2. Set the environment variable in **Heroic** — globally under
+   *Settings → Advanced → Environment Variables*, or per game via
+   *game page → Settings → Advanced → Environment Variables*:
+
+   ```
+   SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy
+   ```
+
+SDL-based games (native or via Wine/Proton's SDL joystick backend) then only
+see the FF-capable proxy. Confirmed working with *Mafia II* via Heroic. The
+same variable works with any other launcher or a direct
+`env SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy …` invocation.
+
 ## Troubleshooting
 
 - **Service doesn't start on connect.** Note for Bluetooth HID devices: they
@@ -113,6 +143,8 @@ don't grab the real pad, games will see both devices), `--wait SECONDS`
   scans sysfs by VID/PID, nothing to adjust.
 - **Steam shows two controllers:** expected — the real (grabbed) pad and the
   proxy. Only the proxy has FF; rename it in Steam so games pick the right one.
+- **Non-Steam game has input but no rumble:** see
+  *Games outside Steam* above — set `SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy`.
 
 ## Reverse-engineering the protocol yourself
 
