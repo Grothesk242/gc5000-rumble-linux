@@ -153,10 +153,9 @@ Two routes work; pick per game.
 **Route A — via Steam Input (the default).** Leave Steam Input enabled and
 set no launch option. Games talk to Steam's virtual controller; Steam Input
 forwards input and rumble to the proxy (the client's own controller test
-uses the same path). Confirmed with *Sheepy: A Short Adventure* on an older,
-pinned Proton. Caveat: Steam Input may list both the real (muted) pad and
-the proxy, so a game can end up bound to the dead slot — if input or
-rumble misbehaves, switch that game to route B.
+uses the same path). Caveat: Steam Input may list both the real (muted)
+pad and the proxy, so a game can end up bound to the dead slot — if input
+or rumble misbehaves, switch that game to route B.
 
 **Route B — direct to the proxy.** Per game:
 
@@ -211,10 +210,13 @@ NW.js/Chromium game *Sheepy: A Short Adventure*):
   started; a controller connected before launch is ignored. If a game sees
   no controller at all, power it off, start the game, wait for the menu,
   then connect the controller.
-- If a game's rumble worked before and vanished after a Steam update, pin
-  an older Proton version for that game (*Properties → Compatibility*).
-  The runtimes shipped with the October 2026 container client broke the
-  rumble path of some games until an older Proton was forced.
+- If a game's rumble worked before and vanished after the October 2026
+  client update, the likely cause is
+  [ValveSoftware/steam-for-linux #13394](https://github.com/ValveSoftware/steam-for-linux/issues/13394):
+  Steam Input no longer creates its virtual Xbox pad for generic evdev
+  controllers, and Chromium/NW.js games only rumble through such a pad.
+  In testing, no Proton version changed this; track the upstream issue and
+  re-test once it is fixed.
 
 ## Troubleshooting
 
@@ -235,15 +237,15 @@ NW.js/Chromium game *Sheepy: A Short Adventure*):
   (unsaved) or Steam Input is still enabled for that game — see
   [Steam](#steam). Verify with the `/proc/<pid>/environ` check above.
 - **Game has input but no rumble:** run the daemon with `-v`; if no
-  `FF upload` lines appear, the game is not sending FF at all. First try
-  pinning an older Proton version for that game (*Properties →
-  Compatibility → force a specific tool*): the runtimes shipped with the
-  October 2026 container client broke the rumble path of some games —
-  confirmed with the NW.js/Chromium game *Sheepy: A Short Adventure*,
-  whose rumble returned as soon as an older Proton was forced. Some other
-  games genuinely never rumble under Proton (some UE4 titles) — a
-  game-side limitation, not a configuration problem. Otherwise pin SDL to
-  the proxy — see [Games](#games).
+  `FF upload` lines appear, the game is not sending FF at all.
+  Chromium/NW.js games (e.g. *Sheepy: A Short Adventure*) only rumble
+  through Steam Input's virtual Xbox pad, which the October 2026 client
+  no longer creates for generic evdev controllers — a Valve regression
+  ([ValveSoftware/steam-for-linux #13394](https://github.com/ValveSoftware/steam-for-linux/issues/13394)),
+  not a proxy problem; changing the Proton version does not help. Some
+  other games genuinely never rumble under Proton (some UE4 titles) —
+  also a game-side limitation. Otherwise pin SDL to the proxy — see
+  [Games](#games).
 - **EVIOCGRAB fails with EBUSY / "Pad ist bereits gegrabbt":** another
   daemon instance (check `systemctl status gc5000-ffd`) or Steam Input
   holds the grab. Stop the service before running a manual instance and
