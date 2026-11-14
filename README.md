@@ -194,6 +194,18 @@ grep -E 'opened for index|reserving XInput|Local Device Found' \
 Running the daemon with `-v` shows `FF upload` lines while playing — proof
 that the game is actually sending rumble to the proxy.
 
+**Game quirks that can look like proxy bugs** (both confirmed with the
+NW.js/Chromium game *Sheepy: A Short Adventure*):
+
+- Some games only register gamepads that connect *after* the game has
+  started; a controller connected before launch is ignored. If a game sees
+  no controller at all, power it off, start the game, wait for the menu,
+  then connect the controller.
+- If a game's rumble worked before and vanished after a Steam update, pin
+  an older Proton version for that game (*Properties → Compatibility*).
+  The runtimes shipped with the October 2026 container client broke the
+  rumble path of some games until an older Proton was forced.
+
 ## Troubleshooting
 
 - **Service doesn't start on connect.** Note for Bluetooth HID devices: they
@@ -213,11 +225,15 @@ that the game is actually sending rumble to the proxy.
   (unsaved) or Steam Input is still enabled for that game — see
   [Steam](#steam). Verify with the `/proc/<pid>/environ` check above.
 - **Game has input but no rumble:** run the daemon with `-v`; if no
-  `FF upload` lines appear, the game is not sending FF at all. Some games
-  never do under Proton (confirmed with the NW.js/Chromium game *Sheepy:
-  A Short Adventure* and some UE4 titles) — a game-side limitation, not a
-  configuration problem. Otherwise pin SDL to the proxy — see
-  [Games](#games).
+  `FF upload` lines appear, the game is not sending FF at all. First try
+  pinning an older Proton version for that game (*Properties →
+  Compatibility → force a specific tool*): the runtimes shipped with the
+  October 2026 container client broke the rumble path of some games —
+  confirmed with the NW.js/Chromium game *Sheepy: A Short Adventure*,
+  whose rumble returned as soon as an older Proton was forced. Some other
+  games genuinely never rumble under Proton (some UE4 titles) — a
+  game-side limitation, not a configuration problem. Otherwise pin SDL to
+  the proxy — see [Games](#games).
 - **EVIOCGRAB fails with EBUSY / "Pad ist bereits gegrabbt":** another
   daemon instance (check `systemctl status gc5000-ffd`) or Steam Input
   holds the grab. Stop the service before running a manual instance and
