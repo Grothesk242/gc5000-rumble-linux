@@ -18,8 +18,9 @@ This project makes rumble work anyway, in two parts:
    Ships with a systemd unit + udev rule so it starts automatically whenever
    the controller connects.
 
-Works with Steam (the proxy shows up as the FF-capable controller) and any
-game that uses Linux force feedback (evdev FF, e.g. via SDL2).
+Works with Steam (per-game setup, see [Games](#games)) and with games
+launched outside Steam (Heroic, GOG, direct SDL/Wine) — anything that uses
+Linux force feedback (evdev FF, e.g. via SDL2).
 
 ## Protocol findings (hidraw)
 
@@ -98,35 +99,97 @@ Options: `--device /dev/hidrawN` (override hidraw node), `--no-grab` (debug:
 don't grab the real pad, games will see both devices), `--wait SECONDS`
 (wait for the device to appear, used by the systemd unit).
 
-## Games outside Steam (Heroic / GOG & friends)
+## Games
 
-Games launched outside Steam often enumerate joysticks themselves and may
-pick the *real* (grabbed, FF-less) pad instead of the proxy — input works,
-but rumble never reaches the daemon. Fix: pin SDL to the proxy.
+The real pad is muted by the daemon (`EVIOCGRAB`), so a game that opens the
+real device gets silence — games must talk to the proxy. Two things make
+that reliable:
 
-1. Give the proxy a stable device path.
-   `/etc/udev/rules.d/91-gc5000-ffproxy.rules`:
+1. **A stable device path for the proxy** (otherwise you depend on the `eventN`
+   numbering). `/etc/udev/rules.d/91-gc5000-ffproxy.rules`:
 
    ```
    ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000 (FF-Proxy)", SYMLINK+="gc5000-ffproxy"
    ```
 
    Then `sudo udevadm control --reload` and reconnect the controller. The
-   proxy is now reachable as `/dev/gc5000-ffproxy`, independent of the
-   `eventN` numbering.
+   proxy is now reachable as `/dev/gc5000-ffproxy`.
 
-2. Set the environment variable in **Heroic** — globally under
-   *Settings → Advanced → Environment Variables*, or per game via
-   *game page → Settings → Advanced → Environment Variables*:
+2. **Pin SDL to the proxy** with `SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy`, so
+   SDL-based games (native or via Wine/Proton's SDL joystick backend) only
+   enumerate the FF-capable proxy and cannot pick the real, muted pad.
+
+How you set the variable depends on the launcher:
+
+### Non-Steam launchers (Heroic, GOG, …)
+
+In **Heroic**, set it globally under *Settings → Advanced → Environment
+Variables*, or per game via *game page → Settings → Advanced → Environment
+Variables*. Confirmed working with *Mafia II* via Heroic. Any other launcher
+or a direct `env SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy …` invocation works
+the same way.
+
+### Steam
+
+Since the October 2026 client update, the Linux Steam client is a 64-bit
+build running inside its own pressure-vessel container, and games are
+launched into a nested container. Two consequences for this proxy:
+
+- **A global `SDL_JOYSTICK_DEVICE` (e.g. set in the `.desktop` launcher) no
+  longer reaches games.** The containerized client passes a curated
+  environment to games (mostly Steam's own `SDL_*` variables) instead of
+  inheriting the client environment. The client itself still honours the
+  variable — its own controller test rumbles — which makes this failure
+  mode confusing.
+- Steam Input may **open and grab both** the real pad and the proxy, while
+  the game enumerates both devices as well; a game can end up with two
+  silent devices and no input at all.
+
+Per-game setup:
+
+1. *Properties → Controller*: set the Steam Input override to **Disable**.
+2. *Properties → Launch options*:
 
    ```
-   SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy
+   SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy %command%
    ```
 
-SDL-based games (native or via Wine/Proton's SDL joystick backend) then only
-see the FF-capable proxy. Confirmed working with *Mafia II* via Heroic. The
-same variable works with any other launcher or a direct
-`env SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy …` invocation.
+Launch options are passed through to the game environment, container or
+not. Confirmed working with *Mafia II* added to Steam as a non-Steam game:
+input through the proxy plus rumble `FF upload` events at the daemon.
+
+**Grab order matters.** The daemon must `EVIOCGRAB` the real pad *before*
+Steam does. In normal operation the udev rule wins that race automatically,
+because the daemon starts the moment the controller connects. When
+restarting the daemon manually while Steam is running, quit Steam first, or
+stop the service and start the daemon in one command:
+
+```sh
+sudo systemctl stop gc5000-ffd && sudo python3 /usr/local/bin/gc5000_ffd.py -v
+```
+
+The daemon refuses to start while the pad is already grabbed (older builds
+print the German "Pad ist bereits gegrabbt") — that means another daemon
+instance (usually the systemd service) or Steam Input holds the grab.
+Restart games after a daemon restart: they keep the old, dead proxy node
+open otherwise.
+
+**Diagnosing**, in order of usefulness:
+
+```sh
+# did the launch option arrive in the game's environment?
+sudo tr '\0' '\n' < /proc/<game-pid>/environ | grep SDL_JOYSTICK_DEVICE
+
+# who currently holds which event node?
+sudo fuser -v /dev/input/event* /dev/gc5000-ffproxy
+
+# did Steam Input open the devices (or fail to)?
+grep -E 'opened for index|reserving XInput|Local Device Found' \
+  ~/.steam/steam/logs/controller.txt | tail
+```
+
+Running the daemon with `-v` shows `FF upload` lines while playing — proof
+that the game is actually sending rumble to the proxy.
 
 ## Troubleshooting
 
@@ -143,8 +206,19 @@ same variable works with any other launcher or a direct
   scans sysfs by VID/PID, nothing to adjust.
 - **Steam shows two controllers:** expected — the real (grabbed) pad and the
   proxy. Only the proxy has FF; rename it in Steam so games pick the right one.
-- **Non-Steam game has input but no rumble:** see
-  *Games outside Steam* above — set `SDL_JOYSTICK_DEVICE=/dev/gc5000-ffproxy`.
+- **Steam game has no gamepad input at all:** the launch option is missing
+  (unsaved) or Steam Input is still enabled for that game — see
+  [Steam](#steam). Verify with the `/proc/<pid>/environ` check above.
+- **Game has input but no rumble:** run the daemon with `-v`; if no
+  `FF upload` lines appear, the game is not sending FF at all. Some games
+  never do under Proton (confirmed with the NW.js/Chromium game *Sheepy:
+  A Short Adventure* and some UE4 titles) — a game-side limitation, not a
+  configuration problem. Otherwise pin SDL to the proxy — see
+  [Games](#games).
+- **EVIOCGRAB fails with EBUSY / "Pad ist bereits gegrabbt":** another
+  daemon instance (check `systemctl status gc5000-ffd`) or Steam Input
+  holds the grab. Stop the service before running a manual instance and
+  mind the grab order in [Steam](#steam).
 
 ## Reverse-engineering the protocol yourself
 
