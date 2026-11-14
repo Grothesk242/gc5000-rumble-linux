@@ -686,7 +686,7 @@ def main():
                     help="wait up to N seconds for the controller at startup "
                          "(for udev/systemd start)")
     sub = ap.add_subparsers(dest="cmd")
-    v = ap.add_parser("vibrate", help="just test vibration (without proxy)")
+    v = sub.add_parser("vibrate", help="just test vibration (without proxy)")
     v.add_argument("--motors", choices=("both", "strong", "weak"), default="both")
     v.add_argument("--duration", type=float, default=0.5, help="seconds per pulse")
     v.add_argument("--pulse", type=int, default=1)
