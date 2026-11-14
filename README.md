@@ -148,7 +148,17 @@ launched into a nested container. Two consequences for this proxy:
   the game enumerates both devices as well; a game can end up with two
   silent devices and no input at all.
 
-Per-game setup:
+Two routes work; pick per game.
+
+**Route A — via Steam Input (the default).** Leave Steam Input enabled and
+set no launch option. Games talk to Steam's virtual controller; Steam Input
+forwards input and rumble to the proxy (the client's own controller test
+uses the same path). Confirmed with *Sheepy: A Short Adventure* on an older,
+pinned Proton. Caveat: Steam Input may list both the real (muted) pad and
+the proxy, so a game can end up bound to the dead slot — if input or
+rumble misbehaves, switch that game to route B.
+
+**Route B — direct to the proxy.** Per game:
 
 1. *Properties → Controller*: set the Steam Input override to **Disable**.
 2. *Properties → Launch options*:
