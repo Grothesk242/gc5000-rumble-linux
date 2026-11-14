@@ -1,0 +1,4 @@
+# Stable device path for the FF proxy (gc5000-ffproxy symlink).
+# Games/launchers pin SDL to /dev/gc5000-ffproxy so they cannot pick
+# the real, grabbed (FF-less) pad -- see README section "Games".
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000 (FF-Proxy)", SYMLINK+="gc5000-ffproxy"

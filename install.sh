@@ -20,6 +20,11 @@ install -m 644 "$DIR/gc5000-ffd.service" /etc/systemd/system/gc5000-ffd.service
 echo "Installing udev rule to /etc/udev/rules.d/90-gc5000.rules ..."
 install -m 644 "$DIR/90-gc5000.rules" /etc/udev/rules.d/90-gc5000.rules
 
+if [ -e "$DIR/91-gc5000-ffproxy.rules" ]; then
+    echo "Installing udev rule to /etc/udev/rules.d/91-gc5000-ffproxy.rules ..."
+    install -m 644 "$DIR/91-gc5000-ffproxy.rules" /etc/udev/rules.d/91-gc5000-ffproxy.rules
+fi
+
 systemctl daemon-reload
 udevadm control --reload
 

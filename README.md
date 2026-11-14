@@ -62,7 +62,9 @@ What it does:
 
 1. Installs `gc5000_ffd.py` to `/usr/local/bin/`
 2. Installs the systemd unit (`gc5000-ffd.service`)
-3. Installs the udev rule (`/etc/udev/rules.d/90-gc5000.rules`)
+3. Installs the udev rules (`/etc/udev/rules.d/90-gc5000.rules` for
+   auto-start, `91-gc5000-ffproxy.rules` for the stable `/dev/gc5000-ffproxy`
+   symlink used by games/launchers)
 4. Reloads systemd + udev
 
 The service is **static** (no `[Install]` section on purpose): it is started
@@ -106,7 +108,8 @@ real device gets silence — games must talk to the proxy. Two things make
 that reliable:
 
 1. **A stable device path for the proxy** (otherwise you depend on the `eventN`
-   numbering). `/etc/udev/rules.d/91-gc5000-ffproxy.rules`:
+   numbering). `/etc/udev/rules.d/91-gc5000-ffproxy.rules` — shipped and
+   installed by `install.sh`; shown here for reference and manual setups:
 
    ```
    ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000 (FF-Proxy)", SYMLINK+="gc5000-ffproxy"
