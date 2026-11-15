@@ -11,6 +11,13 @@ fi
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Stop any running instance first: a stale daemon keeps executing the OLD
+# code after the files on disk have been replaced, and its delayed exit
+# races with the next udev-triggered start of the new one.
+echo "Stopping running gc5000-ffd instances ..."
+systemctl stop gc5000-ffd 2>/dev/null || true
+pkill -f gc5000_ffd.py 2>/dev/null || true
+
 echo "Installing daemon to /usr/local/bin/gc5000_ffd.py ..."
 install -m 755 "$DIR/gc5000_ffd.py" /usr/local/bin/gc5000_ffd.py
 
@@ -35,5 +42,7 @@ udevadm control --reload
 
 echo
 echo "Done. Connect (or power-cycle) your Nokia GC 5000 -- the service"
-echo "starts automatically. Check with:"
+echo "starts automatically. If the pad is already connected, start it now:"
+echo "  sudo systemctl start gc5000-ffd"
+echo "Check with:"
 echo "  systemctl status gc5000-ffd"
