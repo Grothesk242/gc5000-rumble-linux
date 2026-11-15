@@ -51,6 +51,8 @@ physically possible intensity levels:
 - Python 3 (standard library only — no pip packages)
 - `fftest` (optional, from `linuxconsole` / `joystick` package) for testing
 - Root (uinput, hidraw, EVIOCGRAB)
+- `acl` (`setfacl`, recommended) — lets the daemon strip uaccess ACLs from
+  the pad's device nodes so Steam cannot open the real pad
 
 ## Installation
 
@@ -64,7 +66,8 @@ What it does:
 2. Installs the systemd unit (`gc5000-ffd.service`)
 3. Installs the udev rules (`/etc/udev/rules.d/90-gc5000.rules` for
    auto-start, `91-gc5000-ffproxy.rules` for the stable `/dev/gc5000-ffproxy`
-   symlink used by games/launchers)
+   symlink used by games/launchers, and `94-gc5000-realmode.rules`, which
+   locks the real pad to root so user space only ever sees the proxy)
 4. Reloads systemd + udev
 
 The service is **static** (no `[Install]` section on purpose): it is started
@@ -148,14 +151,27 @@ launched into a nested container. Two consequences for this proxy:
   the game enumerates both devices as well; a game can end up with two
   silent devices and no input at all.
 
+**Lock the real pad away from user space.** When Steam Input can open the
+grabbed (silent) real pad, it registers it as a controller next to the
+proxy; a game that binds or rumbles that dead slot loses rumble (or
+input) for no visible reason. Keep the pad exclusive to the daemon:
+`94-gc5000-realmode.rules` (shipped, installed by `install.sh`) sets the
+pad's event, js and hidraw nodes to mode 0600 root-only — and because
+mode bits alone are not enough (logind's uaccess mechanism grants the
+seated user an ACL that overrides them), the daemon strips those ACLs
+from the nodes at startup (`setfacl -b`, needs the `acl` package). The
+udev rule restarts the service on every reconnect, so the lock survives
+power-cycling. With the lock in place, Steam sees only the FF proxy and
+the dead slot disappears.
+
 Two routes work; pick per game.
 
 **Route A — via Steam Input (the default).** Leave Steam Input enabled and
 set no launch option. Games talk to Steam's virtual controller; Steam Input
 forwards input and rumble to the proxy (the client's own controller test
-uses the same path). Caveat: Steam Input may list both the real (muted)
-pad and the proxy, so a game can end up bound to the dead slot — if input
-or rumble misbehaves, switch that game to route B.
+uses the same path). If input or rumble misbehaves on this route, check
+that the real pad is actually locked away (daemon log: `ACLs stripped`);
+otherwise switch that game to route B.
 
 **Route B — direct to the proxy.** Per game:
 
@@ -231,8 +247,11 @@ NW.js/Chromium game *Sheepy: A Short Adventure*):
   `journalctl -u gc5000-ffd -f`.
 - **hidraw node moved** (e.g. `hidraw5` instead of `hidraw3`): the daemon
   scans sysfs by VID/PID, nothing to adjust.
-- **Steam shows two controllers:** expected — the real (grabbed) pad and the
-  proxy. Only the proxy has FF; rename it in Steam so games pick the right one.
+- **Steam shows two controllers:** with the shipped lockdown the real pad
+  stays invisible, and Steam should list only the proxy. If both appear,
+  the lock is not active: check `getfacl /dev/input/eventN` for a user ACL,
+  make sure the `acl` package and `94-gc5000-realmode.rules` are installed
+  (`sudo ./install.sh`), and restart Steam.
 - **Steam game has no gamepad input at all:** the launch option is missing
   (unsaved) or Steam Input is still enabled for that game — see
   [Steam](#steam). Verify with the `/proc/<pid>/environ` check above.

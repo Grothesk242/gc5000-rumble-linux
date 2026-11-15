@@ -25,6 +25,11 @@ if [ -e "$DIR/91-gc5000-ffproxy.rules" ]; then
     install -m 644 "$DIR/91-gc5000-ffproxy.rules" /etc/udev/rules.d/91-gc5000-ffproxy.rules
 fi
 
+if [ -e "$DIR/94-gc5000-realmode.rules" ]; then
+    echo "Installing udev rule to /etc/udev/rules.d/94-gc5000-realmode.rules ..."
+    install -m 644 "$DIR/94-gc5000-realmode.rules" /etc/udev/rules.d/94-gc5000-realmode.rules
+fi
+
 systemctl daemon-reload
 udevadm control --reload
 

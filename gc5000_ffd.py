@@ -77,6 +77,7 @@ import math
 import os
 import select
 import struct
+import subprocess
 import sys
 import time
 
@@ -338,6 +339,56 @@ def find_pad_event():
     return None
 
 
+def find_pad_js(pad_path):
+    """Legacy /dev/input/js* node of the same pad (Steam can open it too)."""
+    event = os.path.basename(pad_path)
+    try:
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+    except OSError:
+        return None
+    for block in content.strip().split("\n\n"):
+        name, handlers = None, []
+        for line in block.splitlines():
+            if line.startswith("N: Name="):
+                name = line[len("N: Name="):].strip().strip('"')
+            elif line.startswith("H: Handlers="):
+                handlers = line[len("H: Handlers="):].split()
+        if name == PAD_NAME and event in handlers:
+            js = [h for h in handlers if h.startswith("js")]
+            if js:
+                return "/dev/input/" + js[0]
+    return None
+
+
+def strip_user_acls(paths, verbose=False):
+    """Remove uaccess ACLs from the real pad's device nodes.
+
+    logind's uaccess mechanism (70-uaccess.rules) grants the seated
+    user rw access to joystick nodes even when the mode bits are
+    root-only (see 94-gc5000-realmode.rules). With such an ACL present,
+    Steam Input can still open the real pad and register it as a dead
+    controller next to the proxy; rumble sent to that dead slot is lost.
+    Removing the ACL keeps the pad exclusive to root, i.e. to this
+    daemon. Needs the `setfacl` binary (acl package); without it the
+    daemon still works, but Steam may see the real pad again.
+    """
+    for path in paths:
+        if not path:
+            continue
+        try:
+            result = subprocess.run(["setfacl", "-b", path],
+                                    capture_output=True, text=True)
+        except FileNotFoundError:
+            print("Warning: setfacl not found (install the 'acl' package) -- "
+                  "user ACLs on the pad may let Steam open the real device.")
+            return
+        if result.returncode != 0:
+            print(f"Warning: setfacl failed on {path}: {result.stderr.strip()}")
+        elif verbose:
+            print(f"  ACLs stripped from {path}")
+
+
 # ------------------------------------------------------------------ uinput
 def ioctl_read(fd, req, size):
     buf = bytearray(size)
@@ -477,6 +528,8 @@ def run_proxy(args):
 
     print(f"hidraw:  {hidraw_node}")
     print(f"pad:     {pad_path}")
+    strip_user_acls([hidraw_node, pad_path, find_pad_js(pad_path)],
+                     verbose=args.verbose)
     rumble = Rumble(hidraw_node, verbose=args.verbose)
     rumble.stop()
 
