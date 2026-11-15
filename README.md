@@ -66,8 +66,10 @@ What it does:
 2. Installs the systemd unit (`gc5000-ffd.service`)
 3. Installs the udev rules (`/etc/udev/rules.d/90-gc5000.rules` for
    auto-start, `91-gc5000-ffproxy.rules` for the stable `/dev/gc5000-ffproxy`
-   symlink used by games/launchers, and `94-gc5000-realmode.rules`, which
-   locks the real pad to root so user space only ever sees the proxy)
+   symlink used by games/launchers, `68-gc5000-hide-realpad.rules`, which hides
+   the pad from SDL and prevents the uaccess tag, and
+   `94-gc5000-realmode.rules`, which locks the real pad to root so user
+   space only ever sees the proxy)
 4. Reloads systemd + udev
 
 The service is **static** (no `[Install]` section on purpose): it is started
@@ -157,11 +159,13 @@ launched into a nested container. Two consequences for this proxy:
 grabbed (silent) real pad, it registers it as a controller next to the
 proxy; a game that binds or rumbles that dead slot loses rumble (or
 input) for no visible reason. Keep the pad exclusive to the daemon:
-`94-gc5000-realmode.rules` (shipped, installed by `install.sh`) sets the
-pad's event, js and hidraw nodes to mode 0600 root-only — and because
-mode bits alone are not enough (logind's uaccess mechanism grants the
-seated user an ACL that overrides them), the daemon strips those ACLs
-from the nodes at startup (`setfacl -b`, needs the `acl` package). The daemon survives disconnects: it re-attaches on its own when the
+`68-gc5000-hide-realpad.rules` (shipped, installed by `install.sh`)
+clears `ID_INPUT_JOYSTICK`/`ID_INPUT_GAMEPAD` for the real pad *before*
+`70-uaccess.rules` runs, so logind never tags the device and never grants
+the seated user an ACL that would override root-only mode bits;
+`94-gc5000-realmode.rules` sets the pad's event, js and hidraw nodes to
+mode 0600 root-only. As a second line of defense the daemon strips any
+leftover ACLs at startup (`setfacl -b`, needs the `acl` package). The daemon survives disconnects: it re-attaches on its own when the
 controller reconnects (new proxy node) and strips the fresh ACLs, so
 the lock survives power-cycling; the udev start is only needed once. With the lock in place, Steam sees only the FF proxy and
 the dead slot disappears.
@@ -251,9 +255,11 @@ NW.js/Chromium game *Sheepy: A Short Adventure*):
   scans sysfs by VID/PID, nothing to adjust.
 - **Steam shows two controllers:** with the shipped lockdown the real pad
   stays invisible, and Steam should list only the proxy. If both appear,
-  the lock is not active: check `getfacl /dev/input/eventN` for a user ACL,
-  make sure the `acl` package and `94-gc5000-realmode.rules` are installed
-  (`sudo ./install.sh`), and restart Steam.
+  the lock is not active: `sudo udevadm test $(udevadm info -q path -n
+  /dev/input/eventN) 2>&1 | grep -iE 'uaccess|ID_INPUT_JOYSTICK'` must show
+  an empty joystick property and no uaccess tag; also check `getfacl` for
+  a leftover user ACL, re-run `sudo ./install.sh`, power-cycle the pad,
+  and restart Steam.
 - **Steam game has no gamepad input at all:** the launch option is missing
   (unsaved) or Steam Input is still enabled for that game — see
   [Steam](#steam). Verify with the `/proc/<pid>/environ` check above.

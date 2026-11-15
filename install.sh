@@ -30,6 +30,11 @@ if [ -e "$DIR/94-gc5000-realmode.rules" ]; then
     install -m 644 "$DIR/94-gc5000-realmode.rules" /etc/udev/rules.d/94-gc5000-realmode.rules
 fi
 
+if [ -e "$DIR/68-gc5000-hide-realpad.rules" ]; then
+    echo "Installing udev rule to /etc/udev/rules.d/68-gc5000-hide-realpad.rules ..."
+    install -m 644 "$DIR/68-gc5000-hide-realpad.rules" /etc/udev/rules.d/68-gc5000-hide-realpad.rules
+fi
+
 systemctl daemon-reload
 udevadm control --reload
 
