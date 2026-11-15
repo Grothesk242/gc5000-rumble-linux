@@ -43,6 +43,7 @@ Bluetooth (udev rule on hidraw add of 1D5A:1802):
   [Unit]
   Description=GC5000 Force-Feedback-Proxy
   StartLimitIntervalSec=0
+
   [Service]
   Type=simple
   ExecStart=/usr/bin/python3 /usr/local/bin/gc5000_ffd.py --wait 10
@@ -100,7 +101,8 @@ UI_FF_UPLOAD, UI_FF_ERASE = 1, 2
 
 
 def _IOC(d, t, nr, size):
-    return (d << 30) | (size << 16) | (t << 8) | nr
+    re
+turn (d << 30) | (size << 16) | (t << 8) | nr
 
 
 # Fallback values in case /usr/include/linux/uinput.h is not readable.
@@ -148,7 +150,8 @@ def _resolve_from_header(verbose=False):
              "struct uinput_ff_upload": 104, "struct uinput_ff_erase": 12}
     rx = re.compile(r"#define\s+(UI_[A-Z_]+)\s+(_IOWR|_IOW|_IOR|_IO)"
                     r"\(\s*(?:'U'|UINPUT_IOCTL_BASE)\s*,\s*(\d+)(?:\s*,\s*([^)]+))?\)")
-    for m in rx.finditer(text):
+    f
+or m in rx.finditer(text):
         name, macro, nr, typ = m.groups()
         d = {"_IOWR": 3, "_IOW": 1, "_IOR": 2, "_IO": 0}[macro]
         typ = (typ or "").strip()
@@ -196,7 +199,8 @@ def _resolve_event_codes(verbose=False):
             print(f"Warning: {name} not found in header, keeping fallback "
                   f"{globals()[name]:#x}.")
     if verbose:
-        print("  FF codes: " + ", ".join(f"{n}={globals()[n]:#x}" for n in names))
+        print("  FF codes: " + ", ".join(f"
+{n}={globals()[n]:#x}" for n in names))
 
 
 def EVIOCGBIT(ev, size):
@@ -252,7 +256,8 @@ def find_hidraw():
                 hid_id = line.split("=", 1)[1]
         try:
             _bus, vid, pid = (int(x, 16) for x in hid_id.split(":"))
-        except ValueError:
+       
+ except ValueError:
             continue
         if vid == VID and pid == PID:
             return node
@@ -309,6 +314,7 @@ class Rumble:
         except OSError as e:
             print(f"hidraw error ({e}), will reopen on next attempt", file=sys.stderr)
             if self.fd is not None:
+
                 try:
                     os.close(self.fd)
                 except OSError:
@@ -359,7 +365,8 @@ def find_pad_js(pad_path):
             js = [h for h in handlers if h.startswith("js")]
             if js:
                 return "/dev/input/" + js[0]
-    return None
+    re
+turn None
 
 
 def strip_user_acls(paths, verbose=False):
@@ -413,7 +420,8 @@ def create_uinput(pad_fd, verbose=False):
     written as struct uinput_user_dev (stable since kernel 2.6)
     instead of using UI_DEV_SETUP/UI_ABS_SETUP.
     """
-    fd = os.open("/dev/uinput", os.O_RDWR | os.O_NONBLOCK)
+    fd = os.open("/dev/uinput", os.O_RDWR | os.O_NONBLO
+CK)
 
     evbits = bitfield(ioctl_read(pad_fd, EVIOCGBIT(0, 4), 4))
     for t in evbits:
@@ -456,7 +464,8 @@ def create_uinput(pad_fd, verbose=False):
     event_path = None
     for entry in sorted(os.listdir("/sys/class/input")):
         try:
-            with open(f"/sys/class/input/{entry}/name") as f:
+            with open(f"/sys/class/input/{entry}/name") as 
+f:
                 if f.read().strip() == PROXY_NAME.decode():
                     for sub in os.listdir(f"/sys/class/input/{entry}"):
                         if sub.startswith("event"):
@@ -526,7 +535,8 @@ def _teardown(rumble, pad_fd, uinput_fd, grabbed):
     try:
         if grabbed:
             fcntl.ioctl(pad_fd, EVIOCGRAB, 0)
-    except OSError:
+    ex
+cept OSError:
         pass
     try:
         fcntl.ioctl(uinput_fd, UI["UI_DEV_DESTROY"])
@@ -559,6 +569,15 @@ def _wait_for_controller(args):
 
 
 def run_proxy(args):
+    # Line-buffer stdout/stderr: with file redirection (e.g. systemd
+    # StandardOutput=append:...) Python block-buffers its output and
+    # lines only reach the log file when the process exits -- a healthy
+    # daemon then looks like a dead log. reconfigure() needs 3.7+.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
     # udev start: the hidraw node may already exist while the pad's
     # event node does not yet (or vice versa) -> poll for --wait seconds.
     deadline = time.monotonic() + getattr(args, "wait", 0.0)
@@ -585,7 +604,8 @@ def run_proxy(args):
 
 
 def _proxy_session(args, hidraw_node, pad_path):
-    """One attach cycle: open the devices, serve, clean up.
+    """One attach cycle:
+ open the devices, serve, clean up.
 
     Returns when the controller disconnects (or the grab stays
     unavailable); raises KeyboardInterrupt through on Ctrl+C. The
@@ -632,7 +652,8 @@ def _proxy_session(args, hidraw_node, pad_path):
     gain = 0xFFFF
     last_refresh = 0.0
     stream = Stream()
-    grabbed = not args.no_grab
+    grabbed = not args.no
+_grab
 
     def motor_target(now=None):
         """Target motor state.
@@ -682,7 +703,8 @@ def _proxy_session(args, hidraw_node, pad_path):
                 timeout = REFRESH_INTERVAL if timeout is None else min(timeout, REFRESH_INTERVAL)
             if any(effects.get(eid) and effects[eid][3] > 0 for eid in active):
                 # Periodic active: re-evaluate the sine levels regularly
-                timeout = PWM_TICK if timeout is None else min(timeout, PWM_TICK)
+                timeout = PWM_TICK if ti
+meout is None else min(timeout, PWM_TICK)
             if timeout is not None and timeout < 0:
                 timeout = 0
 
@@ -722,7 +744,8 @@ def _proxy_session(args, hidraw_node, pad_path):
                             fcntl.ioctl(uinput_fd, UI["UI_BEGIN_FF_UPLOAD"], buf, True)
                             effect = bytes(buf[8:56])   # effect (48), old follows at offset 56
                             parsed = parse_effect(effect)
-                            _etype, eid = struct.unpack_from("<Hh", effect, 0)
+         
+                   _etype, eid = struct.unpack_from("<Hh", effect, 0)
                             if parsed:
                                 effects[eid] = parsed
                                 retval = 0
@@ -755,7 +778,8 @@ def _proxy_session(args, hidraw_node, pad_path):
                             if args.verbose:
                                 print(f"  [{_ts()}] FF playback id={code} value={value}")
                             if value > 0:
-                                length = effects[code][2]
+                            
+    length = effects[code][2]
                                 now = time.monotonic()
                                 active[code] = ((now + length / 1000.0) if length > 0
                                                 else None, now)
@@ -801,7 +825,8 @@ def main():
     ap.add_argument("--verbose", "-v", action="store_true", help="log FF traffic")
     ap.add_argument("--wait", type=float, default=0.0, metavar="SEC",
                     help="wait up to N seconds for the controller at startup "
-                         "(for udev/systemd start)")
+                         "(for udev/systemd start)
+")
     sub = ap.add_subparsers(dest="cmd")
     v = sub.add_parser("vibrate", help="just test vibration (without proxy)")
     v.add_argument("--motors", choices=("both", "strong", "weak"), default="both")
@@ -818,10 +843,6 @@ def main():
         print("Note: not running as root -- uinput/hidraw/GRAB will fail.\n")
 
     if args.cmd == "vibrate":
-        cmd_vibrate(args)
-    else:
-        run_proxy(args)
+        cmd_vibrate(args
 
-
-if __name__ == "__main__":
-    main()
+... [Content truncated]
