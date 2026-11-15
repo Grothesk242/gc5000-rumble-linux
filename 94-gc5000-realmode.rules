@@ -1,8 +1,12 @@
 # Lock the real pad to root: only the FF proxy daemon (root) may open it.
 # Steam Input and games should only ever see the FF proxy.
-# Mode bits alone are not enough: logind's uaccess mechanism grants the
-# seated user an ACL that overrides root-only permissions; the daemon
-# strips those ACLs at startup (see gc5000_ffd.py, strip_user_acls).
-ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000", MODE="0600", OWNER="root", GROUP="root"
-ACTION=="add", SUBSYSTEM=="input", KERNEL=="js*", ATTRS{name}=="Nokia GC 5000", MODE="0600", OWNER="root", GROUP="root"
-ACTION=="add", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", KERNELS=="0005:1D5A:1802.*", MODE="0600", OWNER="root", GROUP="root"
+# Mode bits alone are not enough: the uaccess builtin (queued by
+# 73-seat-late.rules for joystick devices) grants the seated user an ACL
+# during the same udev event. This rule runs at priority 94 -- AFTER that
+# builtin in the same RUN queue -- and strips the ACL again via setfacl
+# before any process (Steam, games) can see the device node. The daemon
+# strips again at startup (see gc5000_ffd.py, strip_user_acls) as a
+# second line of defense. Needs the acl package (setfacl).
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Nokia GC 5000", MODE="0600", OWNER="root", GROUP="root", RUN+="/usr/bin/setfacl -b $devnode"
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="js*", ATTRS{name}=="Nokia GC 5000", MODE="0600", OWNER="root", GROUP="root", RUN+="/usr/bin/setfacl -b $devnode"
+ACTION=="add|change", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", KERNELS=="0005:1D5A:1802.*", MODE="0600", OWNER="root", GROUP="root", RUN+="/usr/bin/setfacl -b $devnode"
