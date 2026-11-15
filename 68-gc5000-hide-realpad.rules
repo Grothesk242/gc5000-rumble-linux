@@ -1,7 +1,0 @@
-# Hide the real pad from user-space joystick enumeration (SDL, games) and
-# prevent logind's uaccess mechanism (70-uaccess.rules) from tagging it:
-# no uaccess tag -> logind never grants the seated user an ACL -> the
-# root-only mode bits from 94-gc5000-realmode.rules actually hold.
-# The daemon additionally strips any leftover ACLs at startup
-# (see gc5000_ffd.py, strip_user_acls).
-ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*|js*", ATTRS{name}=="Nokia GC 5000", ENV{ID_INPUT_JOYSTICK}="", ENV{ID_INPUT_GAMEPAD}=""
