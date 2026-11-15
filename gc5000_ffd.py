@@ -48,9 +48,10 @@ Bluetooth (udev rule on hidraw add of 1D5A:1802):
   ExecStart=/usr/bin/python3 /usr/local/bin/gc5000_ffd.py --wait 10
   Restart=on-failure
   RestartSec=2
-  # No [Install] section: the service is triggered exclusively by the
-  # udev rule. A Bluetooth disconnect ends it with exit code 0
-  # (no restart loop while the pad is away).
+  # No [Install] section: the service is triggered by the udev rule.
+  # The daemon survives Bluetooth disconnects (it waits for the pad
+  # and re-attaches on reconnect), so the udev start is only needed
+  # once; no restart loop while the pad is away.
   ------------------------------------------------------------
 
   /etc/udev/rules.d/90-gc5000.rules
@@ -304,7 +305,7 @@ class Rumble:
                 self.fd = os.open(self.node, os.O_WRONLY | os.O_NONBLOCK)
             os.write(self.fd, self._report(self.current))
             if log and self.verbose:
-                print(f"  rumble -> strong={self.current[0]} weak={self.current[1]}")
+                print(f"  [{_ts()}] rumble -> strong={self.current[0]} weak={self.current[1]}")
         except OSError as e:
             print(f"hidraw error ({e}), will reopen on next attempt", file=sys.stderr)
             if self.fd is not None:
@@ -511,6 +512,52 @@ def parse_effect(effect):
     return None  # not supported
 
 
+def _ts():
+    return time.strftime("%H:%M:%S")
+
+
+def _log(msg):
+    print(f"[{_ts()}] {msg}")
+
+
+def _teardown(rumble, pad_fd, uinput_fd, grabbed):
+    """Release the grab, destroy the proxy, close everything."""
+    rumble.stop()
+    try:
+        if grabbed:
+            fcntl.ioctl(pad_fd, EVIOCGRAB, 0)
+    except OSError:
+        pass
+    try:
+        fcntl.ioctl(uinput_fd, UI["UI_DEV_DESTROY"])
+    except OSError:
+        pass
+    for fd in (pad_fd, uinput_fd):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _wait_for_controller(args):
+    """Block until the controller's hidraw and event nodes are present.
+
+    After a disconnect the old nodes can linger for a moment -- give
+    them time to disappear so we do not re-open stale fds.
+    """
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if not (args.device or find_hidraw()) and not find_pad_event():
+            break
+        time.sleep(0.25)
+    while True:
+        hidraw_node = args.device or find_hidraw()
+        pad_path = find_pad_event()
+        if hidraw_node and pad_path:
+            return hidraw_node, pad_path
+        time.sleep(0.5)
+
+
 def run_proxy(args):
     # udev start: the hidraw node may already exist while the pad's
     # event node does not yet (or vice versa) -> poll for --wait seconds.
@@ -526,8 +573,29 @@ def run_proxy(args):
     if not pad_path:
         sys.exit("No gamepad event device 'Nokia GC 5000' found (ABS != 0).")
 
-    print(f"hidraw:  {hidraw_node}")
-    print(f"pad:     {pad_path}")
+
+    try:
+        while True:
+            _proxy_session(args, hidraw_node, pad_path)
+            _log("Session ended -- waiting for the controller ...")
+            hidraw_node, pad_path = _wait_for_controller(args)
+    except KeyboardInterrupt:
+        _log("Shutting down (Ctrl+C).")
+        print("Proxy stopped.")
+
+
+def _proxy_session(args, hidraw_node, pad_path):
+    """One attach cycle: open the devices, serve, clean up.
+
+    Returns when the controller disconnects (or the grab stays
+    unavailable); raises KeyboardInterrupt through on Ctrl+C. The
+    outer run_proxy loop calls us again as soon as the pad is back,
+    so a Bluetooth reconnect no longer needs a service restart --
+    that closes the systemd race where the udev start hits the unit
+    while the old instance is still shutting down.
+    """
+    _log(f"hidraw:  {hidraw_node}")
+    _log(f"pad:     {pad_path}")
     strip_user_acls([hidraw_node, pad_path, find_pad_js(pad_path)],
                      verbose=args.verbose)
     rumble = Rumble(hidraw_node, verbose=args.verbose)
@@ -535,20 +603,29 @@ def run_proxy(args):
 
     pad_fd = os.open(pad_path, os.O_RDWR | os.O_NONBLOCK)
     uinput_fd, event_path = create_uinput(pad_fd, verbose=args.verbose)
-    if not args.no_grab:
-        try:
-            fcntl.ioctl(pad_fd, EVIOCGRAB, 1)
-        except OSError as e:
-            if e.errno == errno.EBUSY:
-                sys.exit("The pad is already grabbed -- is another daemon\n"
-                         " instance running?\n"
-                         "  systemctl status gc5000-ffd\n"
-                         "  sudo systemctl stop gc5000-ffd  # then start again\n"
-                         "(Hint: the systemd service restarts automatically via\n"
-                         " the udev rule on every controller reconnect.)")
-            raise
-    print(f"proxy:   {event_path}  (fftest {event_path})")
-    print("FF proxy active -- Ctrl+C to quit.")
+    grabbed = not args.no_grab
+    if grabbed:
+        grab_deadline = time.monotonic() + 90.0
+        announced = False
+        while True:
+            try:
+                fcntl.ioctl(pad_fd, EVIOCGRAB, 1)
+                break
+            except OSError as e:
+                if e.errno != errno.EBUSY:
+                    raise
+                if time.monotonic() >= grab_deadline:
+                    _log("Grab still held by another process (Steam Input?) -- "
+                         "ending this session, will retry.")
+                    _teardown(rumble, pad_fd, uinput_fd, grabbed)
+                    return
+                if not announced:
+                    _log("Pad is grabbed by another process -- retrying for "
+                         "up to 90 s (Steam Input during an active game).")
+                    announced = True
+                time.sleep(0.5)
+    _log(f"proxy:   {event_path}  (fftest {event_path})")
+    _log("FF proxy active.")
 
     effects = {}   # effect_id -> (strong, weak, length_ms, period_ms)
     active = {}    # effect_id -> (deadline | None, start time)
@@ -650,7 +727,7 @@ def run_proxy(args):
                                 effects[eid] = parsed
                                 retval = 0
                                 if args.verbose:
-                                    print(f"  FF upload id={eid} -> {parsed}")
+                                    print(f"  [{_ts()}] FF upload id={eid} -> {parsed}")
                             else:
                                 retval = 22  # EINVAL
                                 print(f"  FF type {struct.unpack_from('<H', effect)[0]:#x} "
@@ -676,7 +753,7 @@ def run_proxy(args):
                             pass
                         elif code in effects:
                             if args.verbose:
-                                print(f"  FF playback id={code} value={value}")
+                                print(f"  [{_ts()}] FF playback id={code} value={value}")
                             if value > 0:
                                 length = effects[code][2]
                                 now = time.monotonic()
@@ -686,25 +763,12 @@ def run_proxy(args):
                                 active.pop(code, None)
                             update_motors(now)
                     # all other types are echoes of the pass-through -> ignore
-    except (KeyboardInterrupt, OSError) as e:
-        print(f"\nShutting down ({e.__class__.__name__}: {e})")
+    except KeyboardInterrupt:
+        raise
+    except OSError as e:
+        _log(f"Session ended: {e}")
     finally:
-        rumble.stop()
-        try:
-            if grabbed:
-                fcntl.ioctl(pad_fd, EVIOCGRAB, 0)
-        except OSError:
-            pass
-        try:
-            fcntl.ioctl(uinput_fd, UI["UI_DEV_DESTROY"])
-        except OSError:
-            pass
-        for fd in (pad_fd, uinput_fd):
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-    print("Proxy stopped.")
+        _teardown(rumble, pad_fd, uinput_fd, grabbed)
 
 
 def cmd_vibrate(args):

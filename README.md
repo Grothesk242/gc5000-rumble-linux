@@ -73,7 +73,9 @@ What it does:
 The service is **static** (no `[Install]` section on purpose): it is started
 by the udev rule whenever the controller's hidraw device appears — including
 hotplug, suspend/resume and reconnects. When Bluetooth drops, the daemon
-exits cleanly (exit code 0) and will be retriggered on the next connect.
+waits for the controller and re-attaches on its own when it reconnects
+(a fresh proxy node) -- no service restart needed. Restart running
+games afterwards: they keep the old, dead proxy node open.
 
 ## Usage
 
@@ -159,9 +161,9 @@ input) for no visible reason. Keep the pad exclusive to the daemon:
 pad's event, js and hidraw nodes to mode 0600 root-only — and because
 mode bits alone are not enough (logind's uaccess mechanism grants the
 seated user an ACL that overrides them), the daemon strips those ACLs
-from the nodes at startup (`setfacl -b`, needs the `acl` package). The
-udev rule restarts the service on every reconnect, so the lock survives
-power-cycling. With the lock in place, Steam sees only the FF proxy and
+from the nodes at startup (`setfacl -b`, needs the `acl` package). The daemon survives disconnects: it re-attaches on its own when the
+controller reconnects (new proxy node) and strips the fresh ACLs, so
+the lock survives power-cycling; the udev start is only needed once. With the lock in place, Steam sees only the FF proxy and
 the dead slot disappears.
 
 Two routes work; pick per game.
